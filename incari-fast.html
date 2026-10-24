@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>incari-fast.html</title>
+<style>body{margin:0;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8b93a1;background:#0b0d10}#cdn-studio-loader{padding:28px}</style>
+</head>
+<body>
+<div id="cdn-studio-loader">Loading incari-fast.html …</div>
+<script>
+
+(function () {
+  var DIR = "incari-fast.parts/";
+  var COUNT = 5;
+  var here = location.href.split('#')[0].split('?')[0];
+  var base = here.slice(0, here.lastIndexOf('/') + 1);
+  var chunks = new Array(COUNT);
+  var left = COUNT;
+
+  function render() {
+    if (--left > 0) { return; }
+    var total = 0, i;
+    for (i = 0; i < COUNT; i++) { total += chunks[i].byteLength; }
+    var joined = new Uint8Array(total), at = 0;
+    for (i = 0; i < COUNT; i++) { joined.set(new Uint8Array(chunks[i]), at); at += chunks[i].byteLength; }
+    var html = new TextDecoder('utf-8').decode(joined);
+    document.open();
+    document.write(html);
+    document.close();
+  }
+
+  function fail(error) {
+    var box = document.getElementById('cdn-studio-loader');
+    var reason = error && error.message ? error.message : error;
+    if (box) { box.innerHTML = 'This page is assembled from 5 part files and one of them could not load (' + reason + ').'; }
+  }
+
+  for (var i = 0; i < COUNT; i++) {
+    (function (index) {
+      fetch(encodeURI(base + DIR + 'p' + ('00' + index).slice(-3) + '.bin'))
+        .then(function (response) {
+          if (!response.ok) { throw new Error('part ' + index + ' returned HTTP ' + response.status); }
+          return response.arrayBuffer();
+        })
+        .then(function (buffer) { chunks[index] = buffer; render(); })
+        .catch(fail);
+    })(i);
+  }
+})();
+
+</script>
+</body>
+</html>
