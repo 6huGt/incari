@@ -1,0 +1,69 @@
+name: LinkForge assemble full HTML
+on:
+  push:
+    paths:
+      - '.linkforge-upload/manifest.json'
+permissions:
+  contents: write
+concurrency:
+  group: linkforge-assemble-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Restore and push the complete original HTML
+        shell: bash
+        run: |
+          node <<'LINKFORGE_NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const { execFileSync } = require('node:child_process');
+          const manifest = JSON.parse(fs.readFileSync('.linkforge-upload/manifest.json', 'utf8'));
+          const root = process.cwd();
+          function safePath(value) {
+            if (typeof value !== 'string' || value.includes('\\') || value.includes('\0') || value.split('/').some(p => p === '..' || p === '.git' || p === '.github')) throw new Error('Unsafe file path');
+            const resolved = path.resolve(root, value);
+            if (!resolved.startsWith(root + path.sep)) throw new Error('File must stay inside the repository');
+            return resolved;
+          }
+          if (!/^[a-f0-9-]+$/.test(manifest.id) || !/\.html?$/i.test(manifest.target) || manifest.target.startsWith('.linkforge-upload/')) throw new Error('Invalid HTML upload');
+          if (!Number.isSafeInteger(manifest.size) || manifest.size < 0 || manifest.size > 100 * 1024 * 1024) throw new Error('HTML exceeds the single-file limit');
+          if (!Array.isArray(manifest.parts) || !manifest.parts.length || manifest.parts.length > 100) throw new Error('Invalid parts list');
+          if (manifest.sourceCommit) {
+            if (!/^[a-f0-9]{40}$/.test(manifest.sourceCommit)) throw new Error('Invalid source commit');
+            execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', manifest.sourceCommit], { stdio: 'inherit' });
+          }
+          const target = safePath(manifest.target);
+          const temporary = safePath('.linkforge-upload/assembled.tmp');
+          fs.writeFileSync(temporary, Buffer.alloc(0));
+          const hash = crypto.createHash('sha256');
+          let size = 0;
+          for (const part of manifest.parts) {
+            safePath(part);
+            const bytes = manifest.sourceCommit
+              ? execFileSync('git', ['show', manifest.sourceCommit + ':' + part], { maxBuffer: 25 * 1024 * 1024 })
+              : fs.readFileSync(safePath(part));
+            size += bytes.length;
+            if (size > manifest.size) throw new Error('Parts exceed the original file size');
+            hash.update(bytes);
+            fs.appendFileSync(temporary, bytes);
+          }
+          const digest = hash.digest('hex');
+          if (size !== manifest.size || (manifest.sha256 && digest !== manifest.sha256)) throw new Error('Original file verification failed');
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.renameSync(temporary, target);
+          fs.writeFileSync('.nojekyll', '');
+          fs.rmSync('.linkforge-upload', { recursive: true, force: true });
+          execFileSync('git', ['config', 'user.name', 'github-actions[bot]']);
+          execFileSync('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
+          execFileSync('git', ['add', '-A', '--', manifest.target, '.nojekyll', '.linkforge-upload']);
+          execFileSync('git', ['commit', '-m', 'Publish complete HTML ' + manifest.id], { stdio: 'inherit' });
+          execFileSync('git', ['push', 'origin', 'HEAD:refs/heads/' + process.env.GITHUB_REF_NAME], { stdio: 'inherit' });
+          console.log('Verified original: ' + size + ' bytes, SHA-256 ' + digest);
+          LINKFORGE_NODE
